@@ -760,51 +760,79 @@ def api_all():
     # Build response
     base_url = request.host_url.rstrip("/")
 
-    # Enrich video data with full CDN URLs
-    enriched = []
+    # Tách video vs photo
+    video_posts = []
+    photo_posts = []
+
     for v in videos:
-        post = {
+        info = {
             "id": v["id"],
-            "type": "photo" if v.get("is_photo") else "video",
             "description": v.get("description", ""),
             "upload_date": v.get("upload_date_formatted", ""),
-            "view_count": v.get("view_count", 0),
-            "like_count": v.get("like_count", 0),
-            "comment_count": v.get("comment_count", 0),
-            "repost_count": v.get("repost_count", 0),
-            "duration": v.get("duration_str", ""),
             "tiktok_url": v.get("url", ""),
-            "thumbnail_cdn": v.get("thumbnail", ""),
-            "thumbnail_local": f"{base_url}/thumb/{v['id']}" if v.get("cached_thumb") else None,
-            "stream_url": f"{base_url}/stream/{v['id']}" if not v.get("is_photo") else None,
+        }
+        stats = {
+            "views": v.get("view_count", 0),
+            "likes": v.get("like_count", 0),
+            "comments": v.get("comment_count", 0),
+            "reposts": v.get("repost_count", 0),
         }
 
-        # Slideshow images
-        if v.get("is_photo") and v.get("slideshow_images"):
-            post["slideshow"] = [
-                f"{base_url}/slideshow/{v['id']}/{i}"
-                for i in range(len(v["slideshow_images"]))
-            ]
-            post["slideshow_count"] = len(v["slideshow_images"])
-
-        enriched.append(post)
+        if v.get("is_photo"):
+            slide_urls = []
+            if v.get("slideshow_images"):
+                slide_urls = [
+                    f"{base_url}/slideshow/{v['id']}/{i}"
+                    for i in range(len(v["slideshow_images"]))
+                ]
+            photo_posts.append({
+                "info": info,
+                "stats": stats,
+                "urls": {
+                    "thumbnail_cdn": v.get("thumbnail", ""),
+                    "thumbnail_local": f"{base_url}/thumb/{v['id']}" if v.get("cached_thumb") else None,
+                    "slideshow": slide_urls,
+                },
+                "slideshow_count": len(slide_urls),
+            })
+        else:
+            video_posts.append({
+                "info": info,
+                "stats": stats,
+                "duration": v.get("duration_str", ""),
+                "urls": {
+                    "stream": f"{base_url}/stream/{v['id']}",
+                    "thumbnail_cdn": v.get("thumbnail", ""),
+                    "thumbnail_local": f"{base_url}/thumb/{v['id']}" if v.get("cached_thumb") else None,
+                },
+            })
 
     return jsonify({
         "profile": {
             "username": profile.get("username", TARGET_USER),
             "nickname": profile.get("nickname", ""),
             "bio": profile.get("bio", ""),
-            "avatar_cdn": profile.get("avatar_cdn", ""),
-            "avatar_local": f"{base_url}/avatar",
-            "followers": profile.get("followers", ""),
-            "following": profile.get("following", ""),
-            "total_likes": profile.get("likes", ""),
-            "total_videos": profile.get("total_videos", ""),
+            "verified": profile.get("verified", False),
             "profile_url": profile.get("profile_url", f"https://www.tiktok.com/@{TARGET_USER}"),
+            "avatar": {
+                "cdn": profile.get("avatar_cdn", ""),
+                "local": f"{base_url}/avatar",
+            },
+            "stats": {
+                "followers": profile.get("followers", 0),
+                "following": profile.get("following", 0),
+                "total_likes": profile.get("likes", 0),
+                "total_videos": profile.get("total_videos", 0),
+            },
         },
-        "posts": enriched,
-        "total_posts": len(enriched),
-        "last_update": meta.get("last_update"),
+        "videos": video_posts,
+        "photos": photo_posts,
+        "summary": {
+            "total_posts": len(videos),
+            "video_count": len(video_posts),
+            "photo_count": len(photo_posts),
+            "last_update": meta.get("last_update"),
+        },
     })
 
 
