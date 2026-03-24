@@ -887,6 +887,8 @@ def stream_video(video_id):
         return jsonify({"error": "Video not found"}), 404
 
     cmd = YTDLP_CMD + [
+        "-f", "best[vcodec!=none][acodec!=none]/bestvideo+bestaudio/best",
+        "--merge-output-format", "mp4",
         "-o", "-",
         "--no-warnings",
         "--quiet",
