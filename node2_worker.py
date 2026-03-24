@@ -65,6 +65,125 @@ def format_number(num):
     return str(num)
 
 
+PROFILE_FILE = os.path.join(CACHE_DIR, "user_profile.json")
+
+
+def scrape_user_profile():
+    """
+    Dùng undetected-chromedriver lấy thông tin profile TikTok:
+    avatar, bio, followers, following, likes, tổng video.
+    """
+    import platform
+
+    try:
+        import undetected_chromedriver as uc
+        from selenium.webdriver.common.by import By
+    except ImportError:
+        print("  ⚠️ Không lấy được profile (thiếu undetected-chromedriver)")
+        return None
+
+    url = f"https://www.tiktok.com/@{TARGET_USER}"
+    print(f"  👤 Scraping profile @{TARGET_USER}...")
+
+    is_linux = platform.system() == "Linux"
+    display = None
+
+    if is_linux:
+        try:
+            from pyvirtualdisplay import Display
+            display = Display(visible=False, size=(1280, 720))
+            display.start()
+        except Exception:
+            pass
+
+    options = uc.ChromeOptions()
+    options.add_argument("--window-size=1280,720")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    if not is_linux:
+        options.add_argument("--window-position=-2000,-2000")
+
+    profile = None
+    driver = None
+    try:
+        driver = uc.Chrome(options=options, headless=False)
+        driver.get(url)
+        import time as _time
+        _time.sleep(5)
+
+        profile = driver.execute_script("""
+        () => {
+            let p = {avatar: '', nickname: '', bio: '', followers: '', following: '', likes: '', videos: ''};
+            try {
+                // Avatar
+                const av = document.querySelector('img[class*="Avatar"], img[data-e2e="user-avatar"]');
+                if (av) p.avatar = av.src;
+
+                // Nickname
+                const h1 = document.querySelector('h1[data-e2e="user-subtitle"], h2[data-e2e="user-subtitle"]');
+                if (h1) p.nickname = h1.textContent.trim();
+
+                // Bio
+                const bio = document.querySelector('h2[data-e2e="user-bio"], span[data-e2e="user-bio"]');
+                if (bio) p.bio = bio.textContent.trim();
+
+                // Stats
+                const stats = document.querySelectorAll('[data-e2e="following-count"], [data-e2e="followers-count"], [data-e2e="likes-count"]');
+                stats.forEach(s => {
+                    const label = s.parentElement?.textContent || '';
+                    const val = s.textContent.trim();
+                    if (label.includes('Đang') || label.includes('Following')) p.following = val;
+                    else if (label.includes('Follower') || label.includes('người')) p.followers = val;
+                    else if (label.includes('Thích') || label.includes('Like')) p.likes = val;
+                });
+
+                // Tổng video
+                const vidCount = document.querySelector('[data-e2e="videos-count"]');
+                if (vidCount) p.videos = vidCount.textContent.trim();
+            } catch(e) {}
+            return p;
+        }
+        """)
+
+        if profile and profile.get("avatar"):
+            # Download avatar
+            avatar_url = profile["avatar"]
+            avatar_path = os.path.join(CACHE_DIR, "avatar.jpg")
+            download_image(avatar_url, avatar_path)
+            profile["avatar_cached"] = True
+            profile["avatar_cdn"] = avatar_url
+            print(f"  ✅ Profile: {profile.get('nickname', '?')} | "
+                  f"Followers: {profile.get('followers', '?')} | "
+                  f"Likes: {profile.get('likes', '?')}")
+        else:
+            print("  ⚠️ Không lấy được profile data")
+
+    except Exception as e:
+        print(f"  ⚠️ Profile scrape error: {e}")
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        if display:
+            try:
+                display.stop()
+            except:
+                pass
+
+    # Save profile
+    if profile:
+        profile["username"] = TARGET_USER
+        profile["profile_url"] = url
+        profile["last_update"] = datetime.now().isoformat()
+        with open(PROFILE_FILE, "w", encoding="utf-8") as f:
+            json.dump(profile, f, ensure_ascii=False, indent=2)
+
+    return profile
+
+
 def scrape_metadata():
     """Thu thập metadata từ TikTok."""
     cmd = YTDLP_CMD + [
@@ -356,6 +475,10 @@ def run_scrape_cycle():
     update_status("scraping", "Đang thu thập metadata...")
 
     raw_videos = scrape_metadata()
+
+    # Scrape user profile (avatar, followers, etc.)
+    scrape_user_profile()
+
     if not raw_videos:
         print("  ❌ Không thu thập được video nào!")
         update_status("error", "Không thu thập được dữ liệu")

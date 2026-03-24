@@ -15,6 +15,7 @@ from datetime import datetime
 from flask import Flask, Response, request, jsonify, send_file, render_template_string
 
 # ======================== CẤU HÌNH ========================
+TARGET_USER = "The_sunflower71"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 THUMB_CACHE_DIR = os.path.join(CACHE_DIR, "thumbnails")
@@ -736,6 +737,84 @@ def serve_thumbnail(video_id):
                         "png": "image/png", "webp": "image/webp"}.get(ext, "image/jpeg")
                 return send_file(thumb_path, mimetype=mime)
     return jsonify({"error": "Not found"}), 404
+
+
+@app.route("/api/all")
+def api_all():
+    """
+    API tổng hợp: profile (avatar, bio, followers, likes) + tất cả bài đăng.
+    """
+    meta = load_meta()
+    videos = meta.get("videos", [])
+
+    # Load profile
+    profile = {}
+    profile_path = os.path.join(CACHE_DIR, "user_profile.json")
+    if os.path.exists(profile_path):
+        try:
+            with open(profile_path, "r", encoding="utf-8") as f:
+                profile = json.load(f)
+        except:
+            pass
+
+    # Build response
+    base_url = request.host_url.rstrip("/")
+
+    # Enrich video data with full CDN URLs
+    enriched = []
+    for v in videos:
+        post = {
+            "id": v["id"],
+            "type": "photo" if v.get("is_photo") else "video",
+            "description": v.get("description", ""),
+            "upload_date": v.get("upload_date_formatted", ""),
+            "view_count": v.get("view_count", 0),
+            "like_count": v.get("like_count", 0),
+            "comment_count": v.get("comment_count", 0),
+            "repost_count": v.get("repost_count", 0),
+            "duration": v.get("duration_str", ""),
+            "tiktok_url": v.get("url", ""),
+            "thumbnail_cdn": v.get("thumbnail", ""),
+            "thumbnail_local": f"{base_url}/thumb/{v['id']}" if v.get("cached_thumb") else None,
+            "stream_url": f"{base_url}/stream/{v['id']}" if not v.get("is_photo") else None,
+        }
+
+        # Slideshow images
+        if v.get("is_photo") and v.get("slideshow_images"):
+            post["slideshow"] = [
+                f"{base_url}/slideshow/{v['id']}/{i}"
+                for i in range(len(v["slideshow_images"]))
+            ]
+            post["slideshow_count"] = len(v["slideshow_images"])
+
+        enriched.append(post)
+
+    return jsonify({
+        "profile": {
+            "username": profile.get("username", TARGET_USER),
+            "nickname": profile.get("nickname", ""),
+            "bio": profile.get("bio", ""),
+            "avatar_cdn": profile.get("avatar_cdn", ""),
+            "avatar_local": f"{base_url}/avatar",
+            "followers": profile.get("followers", ""),
+            "following": profile.get("following", ""),
+            "total_likes": profile.get("likes", ""),
+            "total_videos": profile.get("videos", ""),
+            "profile_url": profile.get("profile_url", f"https://www.tiktok.com/@{TARGET_USER}"),
+        },
+        "posts": enriched,
+        "total_posts": len(enriched),
+        "last_update": meta.get("last_update"),
+    })
+
+
+@app.route("/avatar")
+def serve_avatar():
+    """Serve ảnh avatar đã cache."""
+    avatar_path = os.path.join(CACHE_DIR, "avatar.jpg")
+    if os.path.exists(avatar_path):
+        return send_file(avatar_path, mimetype="image/jpeg")
+    return jsonify({"error": "Avatar not found"}), 404
 
 
 @app.route("/slideshow/<video_id>/<int:index>")
