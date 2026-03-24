@@ -1,0 +1,38 @@
+# Cache & data
+cache/
+data/
+*.dump
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Env
+.env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Old/test files
+_test_*.py
+_dump*.json
+proxy_server.py
+tiktok_scraper.py
