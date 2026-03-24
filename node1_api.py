@@ -795,6 +795,11 @@ def api_all():
             photo_posts.append({
                 "info": info,
                 "stats": stats,
+                "music": {
+                    "title": v.get("music_title", ""),
+                    "author": v.get("music_author", ""),
+                    "audio_url": f"{base_url}/audio/{v['id']}" if v.get("audio_file") else None,
+                },
                 "urls": {
                     "thumbnail_cdn": v.get("thumbnail", ""),
                     "thumbnail_local": f"{base_url}/thumb/{v['id']}" if v.get("cached_thumb") else None,
@@ -841,6 +846,15 @@ def api_all():
             "last_update": meta.get("last_update"),
         },
     })
+
+
+@app.route("/audio/<video_id>")
+def serve_audio(video_id):
+    """Serve audio mp3 cho bài ảnh slideshow."""
+    audio_path = os.path.join(CACHE_DIR, "audio", f"{video_id}.mp3")
+    if os.path.exists(audio_path):
+        return send_file(audio_path, mimetype="audio/mpeg")
+    return jsonify({"error": "Audio not found"}), 404
 
 
 @app.route("/avatar")

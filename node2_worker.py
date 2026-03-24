@@ -395,6 +395,39 @@ def download_slideshow_images(video_id, raw, username=TARGET_USER):
     return images
 
 
+AUDIO_CACHE_DIR = os.path.join(CACHE_DIR, "audio")
+
+
+def download_audio(video_id, tiktok_url):
+    """Download audio (nhạc nền) cho bài ảnh slideshow."""
+    os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+    output_path = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.mp3")
+
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+        return f"{video_id}.mp3"
+
+    if not tiktok_url:
+        return None
+
+    try:
+        cmd = YTDLP_CMD + [
+            "-f", "audio/best",
+            "-x", "--audio-format", "mp3",
+            "-o", output_path,
+            "--no-warnings",
+            "--quiet",
+            "--no-playlist",
+            tiktok_url
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=30)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            return f"{video_id}.mp3"
+    except Exception as e:
+        print(f"    ⚠️ Lỗi download audio: {e}")
+
+    return None
+
+
 def extract_info(raw):
     """Trích xuất thông tin từ raw data."""
     upload_date = raw.get("upload_date", "")
@@ -422,6 +455,8 @@ def extract_info(raw):
         "height": raw.get("height"),
         "is_photo": photo,
         "post_type": "photo" if photo else "video",
+        "music_title": raw.get("track", raw.get("title", "")),
+        "music_author": raw.get("artist", raw.get("channel", "")),
     }
 
     if not photo:
@@ -490,12 +525,19 @@ def run_scrape_cycle():
         info["cached_thumb"] = thumb_file
 
         if info["is_photo"]:
-            # Photo post - download slideshow images
+            # Photo post - download slideshow images + audio
             photo_count += 1
             slides = download_slideshow_images(video_id, raw)
             info["slideshow_images"] = slides
             info["slideshow_count"] = len(slides)
-            print(f"📷 {len(slides)} ảnh")
+
+            # Download audio (nhạc nền)
+            audio_file = download_audio(video_id, info.get("url", ""))
+            info["audio_file"] = audio_file
+            slide_txt = f"📷 {len(slides)} ảnh"
+            if audio_file:
+                slide_txt += " + 🎵 audio"
+            print(slide_txt)
         else:
             # Video post - chỉ lưu metadata, KHÔNG download video
             video_count += 1
