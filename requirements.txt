@@ -1,6 +1,7 @@
 yt-dlp>=2024.0.0
 requests>=2.31.0
 flask>=3.0.0
+setuptools>=69.0.0
 undetected-chromedriver>=3.5.0
 selenium>=4.15.0
 pyvirtualdisplay>=3.0
