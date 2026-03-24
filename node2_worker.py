@@ -70,8 +70,8 @@ PROFILE_FILE = os.path.join(CACHE_DIR, "user_profile.json")
 
 def scrape_user_profile():
     """
-    Dùng undetected-chromedriver lấy thông tin profile TikTok:
-    avatar, bio, followers, following, likes, tổng video.
+    Dùng undetected-chromedriver lấy thông tin profile TikTok
+    từ __UNIVERSAL_DATA_FOR_REHYDRATION__ script tag.
     """
     import platform
 
@@ -112,52 +112,40 @@ def scrape_user_profile():
         import time as _time
         _time.sleep(5)
 
-        profile = driver.execute_script("""
-        () => {
-            let p = {avatar: '', nickname: '', bio: '', followers: '', following: '', likes: '', videos: ''};
-            try {
-                // Avatar
-                const av = document.querySelector('img[class*="Avatar"], img[data-e2e="user-avatar"]');
-                if (av) p.avatar = av.src;
+        # Extract from __UNIVERSAL_DATA_FOR_REHYDRATION__
+        script = driver.find_element(By.ID, "__UNIVERSAL_DATA_FOR_REHYDRATION__")
+        import json as _json
+        data = _json.loads(script.get_attribute("textContent"))
+        scope = data.get("__DEFAULT_SCOPE__", {})
+        user_detail = scope.get("webapp.user-detail", {})
+        user_info = user_detail.get("userInfo", {})
+        user = user_info.get("user", {})
+        stats = user_info.get("stats", {})
 
-                // Nickname
-                const h1 = document.querySelector('h1[data-e2e="user-subtitle"], h2[data-e2e="user-subtitle"]');
-                if (h1) p.nickname = h1.textContent.trim();
+        avatar_url = user.get("avatarLarger") or user.get("avatarMedium") or user.get("avatarThumb", "")
 
-                // Bio
-                const bio = document.querySelector('h2[data-e2e="user-bio"], span[data-e2e="user-bio"]');
-                if (bio) p.bio = bio.textContent.trim();
-
-                // Stats
-                const stats = document.querySelectorAll('[data-e2e="following-count"], [data-e2e="followers-count"], [data-e2e="likes-count"]');
-                stats.forEach(s => {
-                    const label = s.parentElement?.textContent || '';
-                    const val = s.textContent.trim();
-                    if (label.includes('Đang') || label.includes('Following')) p.following = val;
-                    else if (label.includes('Follower') || label.includes('người')) p.followers = val;
-                    else if (label.includes('Thích') || label.includes('Like')) p.likes = val;
-                });
-
-                // Tổng video
-                const vidCount = document.querySelector('[data-e2e="videos-count"]');
-                if (vidCount) p.videos = vidCount.textContent.trim();
-            } catch(e) {}
-            return p;
+        profile = {
+            "nickname": user.get("nickname", ""),
+            "bio": user.get("signature", ""),
+            "avatar_cdn": avatar_url,
+            "verified": user.get("verified", False),
+            "followers": stats.get("followerCount", 0),
+            "following": stats.get("followingCount", 0),
+            "likes": stats.get("heartCount", stats.get("heart", 0)),
+            "total_videos": stats.get("videoCount", 0),
+            "digg_count": stats.get("diggCount", 0),
         }
-        """)
 
-        if profile and profile.get("avatar"):
-            # Download avatar
-            avatar_url = profile["avatar"]
+        # Download avatar
+        if avatar_url:
             avatar_path = os.path.join(CACHE_DIR, "avatar.jpg")
             download_image(avatar_url, avatar_path)
             profile["avatar_cached"] = True
-            profile["avatar_cdn"] = avatar_url
-            print(f"  ✅ Profile: {profile.get('nickname', '?')} | "
-                  f"Followers: {profile.get('followers', '?')} | "
-                  f"Likes: {profile.get('likes', '?')}")
-        else:
-            print("  ⚠️ Không lấy được profile data")
+
+        print(f"  ✅ Profile: {profile['nickname']} | "
+              f"Followers: {profile['followers']} | "
+              f"Likes: {profile['likes']} | "
+              f"Videos: {profile['total_videos']}")
 
     except Exception as e:
         print(f"  ⚠️ Profile scrape error: {e}")

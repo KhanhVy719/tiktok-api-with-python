@@ -799,7 +799,7 @@ def api_all():
             "followers": profile.get("followers", ""),
             "following": profile.get("following", ""),
             "total_likes": profile.get("likes", ""),
-            "total_videos": profile.get("videos", ""),
+            "total_videos": profile.get("total_videos", ""),
             "profile_url": profile.get("profile_url", f"https://www.tiktok.com/@{TARGET_USER}"),
         },
         "posts": enriched,
