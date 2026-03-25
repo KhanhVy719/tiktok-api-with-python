@@ -854,7 +854,7 @@ def api_all():
                 music_text = music.get("music_text", "") if music else ""
                 story_photos.append({
                     **story_info,
-                    "image": f"{base_url}/story/image?url={cdn}" if cdn else None,
+                    "image": f"{base_url}/story/image/{story_id}",
                     "cdn_url": cdn,
                     "music": {
                         "title": music_text,
@@ -1069,26 +1069,25 @@ def cdn_proxy_request(url, content_type_default="application/octet-stream"):
         return jsonify({"error": f"CDN proxy error: {str(e)}"}), 500
 
 
-@app.route("/story/image")
-def story_image():
+@app.route("/story/image/<story_id>")
+def story_image(story_id):
     """Serve ảnh story. Local file trước, CDN proxy fallback."""
-    url = request.args.get("url", "")
-    if not url or not url.startswith("http"):
-        return jsonify({"error": "Missing url param"}), 400
+    # 1. File local
+    img_path = os.path.join(STORY_DATA_DIR, "stories", f"img_{story_id}.jpg")
+    if os.path.exists(img_path):
+        return send_file(img_path, mimetype="image/jpeg")
 
-    # Thử tìm file local từ story_id trong JSON cache
+    # 2. Tìm CDN URL từ JSON → cookie proxy
     for pattern_name in glob.glob(os.path.join(STORY_DATA_DIR, "tiktok_diary_*.json")):
         with open(pattern_name, "r", encoding="utf-8") as f:
             data = json.load(f)
         for s in data.get("stories", []):
-            if s.get("cdn_url", "") == url or s.get("image_cdn", "") == url:
-                sid = s.get("story_id", "")
-                img_path = os.path.join(STORY_DATA_DIR, "stories", f"img_{sid}.jpg")
-                if os.path.exists(img_path):
-                    return send_file(img_path, mimetype="image/jpeg")
+            if s.get("story_id") == story_id:
+                cdn = s.get("cdn_url", "") or s.get("image_cdn", "")
+                if cdn:
+                    return cdn_proxy_request(cdn, "image/jpeg")
 
-    # Fallback: CDN proxy với cookies
-    return cdn_proxy_request(url, "image/jpeg")
+    return jsonify({"error": "Story image not found"}), 404
 
 
 @app.route("/api/stories")
