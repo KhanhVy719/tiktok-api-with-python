@@ -814,10 +814,53 @@ def api_all():
                 "duration": v.get("duration_str", ""),
                 "urls": {
                     "stream": f"{base_url}/stream/{v['id']}",
+                    "hls": f"{base_url}/hls/{v['id']}/master.m3u8",
                     "thumbnail_cdn": v.get("thumbnail", ""),
                     "thumbnail_local": f"{base_url}/thumb/{v['id']}" if v.get("cached_thumb") else None,
                 },
             })
+
+    # ==== STORIES (nhật ký 24h) ====
+    story_data = load_story_data(TARGET_USER)
+    story_videos = []
+    story_photos = []
+
+    if story_data:
+        for s in story_data.get("stories", []):
+            story_id = s.get("story_id", "")
+            story_info = {
+                "id": story_id,
+                "url": s.get("url", ""),
+                "title": s.get("title", ""),
+                "timestamp": s.get("timestamp", ""),
+            }
+
+            if s.get("type") == "video":
+                music = s.get("music")
+                story_videos.append({
+                    **story_info,
+                    "duration": s.get("duration", 0),
+                    "stream": f"{base_url}/story/stream/{story_id}",
+                    "hls": f"{base_url}/hls/{story_id}/master.m3u8",
+                    "thumbnail": s.get("thumbnail", ""),
+                    "music": {
+                        "title": music.get("title", "") if music else "",
+                        "author": music.get("author", "") if music else "",
+                    } if music else None,
+                })
+            elif s.get("type") == "photo":
+                cdn = s.get("cdn_url", "")
+                music = s.get("music")
+                music_text = music.get("music_text", "") if music else ""
+                story_photos.append({
+                    **story_info,
+                    "image": f"{base_url}/story/image?url={cdn}" if cdn else None,
+                    "cdn_url": cdn,
+                    "music": {
+                        "title": music_text,
+                        "audio_stream": f"{base_url}/story/audio/{story_id}",
+                    } if music else None,
+                })
 
     return jsonify({
         "profile": {
@@ -837,12 +880,21 @@ def api_all():
                 "total_videos": profile.get("total_videos", 0),
             },
         },
-        "videos": video_posts,
-        "photos": photo_posts,
+        "posts": {
+            "videos": video_posts,
+            "photos": photo_posts,
+        },
+        "stories": {
+            "videos": story_videos,
+            "photos": story_photos,
+            "scrape_time": story_data.get("scrape_info", {}).get("scrape_time", "") if story_data else None,
+        },
         "summary": {
             "total_posts": len(videos),
             "video_count": len(video_posts),
             "photo_count": len(photo_posts),
+            "story_video_count": len(story_videos),
+            "story_photo_count": len(story_photos),
             "last_update": meta.get("last_update"),
         },
     })
@@ -940,13 +992,419 @@ def stream_video(video_id):
         return jsonify({"error": f"Stream error: {str(e)}"}), 500
 
 
+# =================== STORY API =============================
+
+import glob
+import requests as req_lib
+
+STORY_DATA_DIR = os.path.join(BASE_DIR, "data")
+COOKIE_FILE = os.path.join(STORY_DATA_DIR, "tiktok_cookies.json")
+
+
+def load_story_data(username=None):
+    """Load story data mới nhất từ JSON."""
+    uname = username or '*'
+    # Thử fixed-name trước (worker mode), fallback timestamped
+    fixed = os.path.join(STORY_DATA_DIR, f"tiktok_diary_{uname}.json")
+    if username and os.path.exists(fixed):
+        with open(fixed, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # Glob tất cả
+    pattern = os.path.join(STORY_DATA_DIR, f"tiktok_diary_{uname}*.json")
+    files = sorted(glob.glob(pattern), reverse=True)
+    if files:
+        with open(files[0], "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def load_tiktok_cookies():
+    """Load cookies đã lưu từ browser session."""
+    if os.path.exists(COOKIE_FILE):
+        try:
+            with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+                cookies_list = json.load(f)
+            # Convert sang dict cho requests
+            return {c["name"]: c["value"] for c in cookies_list if "name" in c and "value" in c}
+        except:
+            pass
+    return {}
+
+
+def cdn_proxy_request(url, content_type_default="application/octet-stream"):
+    """Proxy CDN URL với cookies TikTok."""
+    cookies = load_tiktok_cookies()
+    try:
+        resp = req_lib.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://www.tiktok.com/",
+                "Accept": "*/*",
+            },
+            cookies=cookies,
+            timeout=30,
+            stream=True
+        )
+
+        if resp.status_code != 200:
+            return jsonify({"error": f"CDN returned {resp.status_code}"}), resp.status_code
+
+        content_type = resp.headers.get("Content-Type", content_type_default)
+
+        def generate():
+            for chunk in resp.iter_content(chunk_size=65536):
+                yield chunk
+
+        return Response(
+            generate(),
+            mimetype=content_type,
+            headers={
+                "Content-Type": content_type,
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "public, max-age=3600",
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": f"CDN proxy error: {str(e)}"}), 500
+
+
+@app.route("/story/image")
+def story_image():
+    """Proxy image CDN URL với cookies."""
+    url = request.args.get("url", "")
+    if not url or not url.startswith("http"):
+        return jsonify({"error": "Missing url param"}), 400
+    return cdn_proxy_request(url, "image/jpeg")
+
+
+@app.route("/api/stories")
+@app.route("/api/stories/<username>")
+def api_stories(username=None):
+    """Trả về danh sách stories từ cache JSON."""
+    username = username or request.args.get("user", TARGET_USER)
+    data = load_story_data(username)
+
+    if not data:
+        return jsonify({"error": f"No story data for @{username}"}), 404
+
+    base_url = request.host_url.rstrip("/")
+    stories = []
+    for s in data.get("stories", []):
+        story_id = s.get("story_id", "")
+        story = {
+            "id": story_id,
+            "type": s.get("type", "unknown"),
+            "url": s.get("url", ""),
+            "title": s.get("title", ""),
+            "duration": s.get("duration", 0),
+            "timestamp": s.get("timestamp", ""),
+        }
+
+        if s.get("type") == "video":
+            story["stream"] = f"{base_url}/story/stream/{story_id}"
+        elif s.get("type") == "photo":
+            cdn = s.get("cdn_url", "")
+            if cdn:
+                story["image"] = f"{base_url}/story/image?url={cdn}"
+                story["cdn_url"] = cdn
+
+        if s.get("thumbnail"):
+            story["thumbnail"] = s["thumbnail"]
+
+        stories.append(story)
+
+    return jsonify({
+        "user": username,
+        "total": len(stories),
+        "scrape_time": data.get("scrape_info", {}).get("scrape_time", ""),
+        "stories": stories,
+    })
+
+
+@app.route("/story/stream/<story_id>")
+def story_stream(story_id):
+    """Stream story video on-demand. yt-dlp lấy CDN URL mới mỗi lần gọi."""
+    # Tìm TikTok URL từ cache
+    tiktok_url = None
+    for pattern_name in glob.glob(os.path.join(STORY_DATA_DIR, "tiktok_diary_*.json")):
+        with open(pattern_name, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for s in data.get("stories", []):
+            if s.get("story_id") == story_id:
+                tiktok_url = s.get("url", "")
+                break
+        if tiktok_url:
+            break
+
+    if not tiktok_url:
+        # Fallback: construct URL
+        tiktok_url = f"https://www.tiktok.com/@/video/{story_id}"
+
+    cmd = YTDLP_CMD + [
+        "-f", "best[vcodec^=h264][acodec!=none]/best[vcodec!=none][acodec!=none]/best",
+        "-o", "-",
+        "--no-warnings",
+        "--quiet",
+        "--no-playlist",
+        tiktok_url
+    ]
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        def generate():
+            try:
+                while True:
+                    chunk = process.stdout.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                process.stdout.close()
+                process.wait()
+
+        return Response(
+            generate(),
+            mimetype="video/mp4",
+            headers={
+                "Content-Type": "video/mp4",
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-cache",  # Không cache vì CDN URL hết hạn
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": f"Stream error: {str(e)}"}), 500
+
+
+@app.route("/story/audio/<story_id>")
+def story_audio(story_id):
+    """Serve audio từ story. 1) Local file 2) Cookie proxy 3) yt-dlp."""
+    # 1. Thử serve file local (đã download trong Phase 1)
+    audio_path = os.path.join(STORY_DATA_DIR, "stories", f"audio_{story_id}.mp3")
+    if os.path.exists(audio_path):
+        return send_file(audio_path, mimetype="audio/mpeg")
+
+    # 2. Tìm story trong JSON cache
+    for pattern_name in glob.glob(os.path.join(STORY_DATA_DIR, "tiktok_diary_*.json")):
+        with open(pattern_name, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for s in data.get("stories", []):
+            if s.get("story_id") == story_id:
+                # Thử cookie proxy với audio_src
+                music = s.get("music", {}) or {}
+                audio_src = music.get("audio_src", "")
+                if audio_src:
+                    return cdn_proxy_request(audio_src, "audio/mpeg")
+
+                # Video → yt-dlp pipe
+                tiktok_url = s.get("url", "")
+                if "/video/" in tiktok_url:
+                    cmd = YTDLP_CMD + [
+                        "-f", "ba/b", "-o", "-",
+                        "--no-warnings", "--quiet", "--no-playlist",
+                        tiktok_url
+                    ]
+                    try:
+                        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        def generate():
+                            try:
+                                while True:
+                                    chunk = process.stdout.read(65536)
+                                    if not chunk:
+                                        break
+                                    yield chunk
+                            finally:
+                                process.stdout.close()
+                                process.wait()
+                        return Response(generate(), mimetype="audio/mpeg",
+                                        headers={"Content-Type": "audio/mpeg",
+                                                 "Access-Control-Allow-Origin": "*",
+                                                 "Cache-Control": "no-cache"})
+                    except Exception as e:
+                        return jsonify({"error": f"Audio stream error: {str(e)}"}), 500
+
+                return jsonify({"error": "No audio source available"}), 404
+
+    return jsonify({"error": "Story not found"}), 404
+
+
+# =================== HLS STREAMING ============================
+
+import threading
+
+HLS_CACHE_DIR = os.path.join(BASE_DIR, "data", "hls")
+HLS_SEGMENT_TIME = 2  # giây mỗi segment
+_hls_locks = {}  # Lock per video_id
+
+
+def get_hls_lock(video_id):
+    if video_id not in _hls_locks:
+        _hls_locks[video_id] = threading.Lock()
+    return _hls_locks[video_id]
+
+
+def find_tiktok_url(video_id):
+    """Tìm TikTok URL từ posts hoặc stories cache."""
+    # Tìm trong posts
+    meta = load_meta()
+    for v in meta.get("videos", []):
+        if v["id"] == video_id:
+            return v.get("url", "")
+
+    # Tìm trong stories
+    for f in glob.glob(os.path.join(STORY_DATA_DIR, "tiktok_diary_*.json")):
+        with open(f, "r", encoding="utf-8") as fp:
+            data = json.load(fp)
+        for s in data.get("stories", []):
+            if s.get("story_id") == video_id:
+                return s.get("url", "")
+
+    return None
+
+
+def generate_hls(video_id, tiktok_url):
+    """Dùng yt-dlp + ffmpeg tạo HLS segments."""
+    hls_dir = os.path.join(HLS_CACHE_DIR, video_id)
+    playlist = os.path.join(hls_dir, "master.m3u8")
+
+    # Đã có cache → skip
+    if os.path.exists(playlist):
+        return True
+
+    os.makedirs(hls_dir, exist_ok=True)
+
+    # yt-dlp download → ffmpeg segment → HLS
+    # Pipeline: yt-dlp -o - | ffmpeg -i pipe:0 → .ts segments
+    ytdlp_cmd = YTDLP_CMD + [
+        "-f", "best[vcodec^=h264]/best",
+        "-o", "-",
+        "--no-warnings", "--quiet", "--no-playlist",
+        tiktok_url
+    ]
+
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-i", "pipe:0",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-f", "hls",
+        "-hls_time", str(HLS_SEGMENT_TIME),
+        "-hls_list_size", "0",
+        "-hls_segment_filename", os.path.join(hls_dir, "seg_%03d.ts"),
+        playlist
+    ]
+
+    try:
+        ytdlp_proc = subprocess.Popen(
+            ytdlp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        ffmpeg_proc = subprocess.Popen(
+            ffmpeg_cmd, stdin=ytdlp_proc.stdout,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        ytdlp_proc.stdout.close()
+
+        _, ffmpeg_err = ffmpeg_proc.communicate(timeout=120)
+
+        if ffmpeg_proc.returncode != 0:
+            # Retry với transcode thay vì copy
+            ytdlp_proc2 = subprocess.Popen(
+                ytdlp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            ffmpeg_cmd2 = [
+                "ffmpeg", "-y",
+                "-i", "pipe:0",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                "-f", "hls",
+                "-hls_time", str(HLS_SEGMENT_TIME),
+                "-hls_list_size", "0",
+                "-hls_segment_filename", os.path.join(hls_dir, "seg_%03d.ts"),
+                playlist
+            ]
+            ffmpeg_proc2 = subprocess.Popen(
+                ffmpeg_cmd2, stdin=ytdlp_proc2.stdout,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            ytdlp_proc2.stdout.close()
+            ffmpeg_proc2.communicate(timeout=120)
+
+        return os.path.exists(playlist)
+    except Exception as e:
+        print(f"HLS error for {video_id}: {e}")
+        return False
+
+
+@app.route("/hls/<video_id>/master.m3u8")
+def hls_playlist(video_id):
+    """Serve HLS playlist. Tự tạo segments nếu chưa có."""
+    hls_dir = os.path.join(HLS_CACHE_DIR, video_id)
+    playlist = os.path.join(hls_dir, "master.m3u8")
+
+    if not os.path.exists(playlist):
+        tiktok_url = find_tiktok_url(video_id)
+        if not tiktok_url:
+            return jsonify({"error": "Video not found"}), 404
+
+        lock = get_hls_lock(video_id)
+        with lock:
+            if not os.path.exists(playlist):
+                if not generate_hls(video_id, tiktok_url):
+                    return jsonify({"error": "HLS generation failed"}), 500
+
+    # Rewrite segment URLs to go through API
+    with open(playlist, "r") as f:
+        content = f.read()
+
+    base_url = request.host_url.rstrip("/")
+    content = content.replace("seg_", f"{base_url}/hls/{video_id}/seg_")
+
+    return Response(
+        content,
+        mimetype="application/vnd.apple.mpegurl",
+        headers={
+            "Content-Type": "application/vnd.apple.mpegurl",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache",
+        }
+    )
+
+
+@app.route("/hls/<video_id>/<segment>")
+def hls_segment(video_id, segment):
+    """Serve HLS .ts segment."""
+    seg_path = os.path.join(HLS_CACHE_DIR, video_id, segment)
+    if os.path.exists(seg_path):
+        return send_file(seg_path, mimetype="video/mp2t")
+    return jsonify({"error": "Segment not found"}), 404
+
+
+def cleanup_hls_cache(max_age_hours=2):
+    """Xóa HLS cache cũ hơn max_age_hours."""
+    if not os.path.exists(HLS_CACHE_DIR):
+        return
+    now = time.time()
+    for vid_dir in os.listdir(HLS_CACHE_DIR):
+        vid_path = os.path.join(HLS_CACHE_DIR, vid_dir)
+        if os.path.isdir(vid_path):
+            mtime = os.path.getmtime(vid_path)
+            if now - mtime > max_age_hours * 3600:
+                import shutil
+                shutil.rmtree(vid_path, ignore_errors=True)
+
+
 # =================== MAIN ==================================
 
 if __name__ == "__main__":
     print(f"""
 ╔══════════════════════════════════════════════════╗
 ║     📡 Node 1 - API Server                      ║
-║     Stream video + Slideshow ảnh                 ║
+║     Stream video + Slideshow ảnh + Stories       ║
 ╚══════════════════════════════════════════════════╝
 
 📡 Server:     http://localhost:{PORT}
@@ -956,6 +1414,11 @@ if __name__ == "__main__":
 🖼️  Thumbnail:  http://localhost:{PORT}/thumb/<id>
 📷 Slideshow:  http://localhost:{PORT}/slideshow/<id>/<index>
 📊 Status:     http://localhost:{PORT}/api/status
+
+📖 Stories:    http://localhost:{PORT}/api/stories/<user>
+🎬 StoryStream: http://localhost:{PORT}/story/stream/<story_id>
+🖼️  StoryImage: http://localhost:{PORT}/story/image?url=<cdn_url>
+📺 HLS:        http://localhost:{PORT}/hls/<id>/master.m3u8
 
 📂 Cache: {CACHE_DIR}
     """)
