@@ -821,7 +821,7 @@ def api_all():
             })
 
     # ==== STORIES (nhật ký 24h) ====
-    story_data = load_story_data(TARGET_USER)
+    story_data = load_story_data(TARGET_USER.lower())
     story_videos = []
     story_photos = []
 
@@ -1082,7 +1082,7 @@ def story_image():
 @app.route("/api/stories/<username>")
 def api_stories(username=None):
     """Trả về danh sách stories từ cache JSON."""
-    username = username or request.args.get("user", TARGET_USER)
+    username = username or request.args.get("user", TARGET_USER.lower())
     data = load_story_data(username)
 
     if not data:
