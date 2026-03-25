@@ -465,32 +465,45 @@ def scrape_stories():
     try:
         print(f"\n📡 Mở profile @{TARGET_USER}...")
         driver.get(TIKTOK_URL)
-        time.sleep(6)
+        time.sleep(10)  # Chờ lâu hơn trên VPS
 
-        # Đóng popup
-        for sel in [
+        # Đóng popup / cookie consent / login modal
+        popup_selectors = [
             'button[data-e2e="modal-close-inner-button"]',
             'div[class*="DivCloseIcon"]',
-        ]:
+            'button[class*="cookie-banner"]',
+            'button[id*="cookies"]',
+            'div[class*="tiktok-cookie"] button',
+            'button[class*="close"]',
+            '[data-e2e="modal-close-inner-button"]',
+        ]
+        for sel in popup_selectors:
             try:
                 btn = driver.find_element(By.CSS_SELECTOR, sel)
                 if btn.is_displayed():
-                    btn.click()
+                    driver.execute_script("arguments[0].click();", btn)
                     time.sleep(0.5)
-                    print("  ✅ Đóng popup")
+                    print(f"  ✅ Đóng popup ({sel})")
             except:
                 continue
 
-
+        time.sleep(2)
 
         # Click avatar mở Story
         print("\n🔍 Click avatar mở Story...")
         avatar_clicked = False
-        for sel in [
+
+        avatar_selectors = [
             'div[data-e2e="user-avatar"] img',
             'span[data-e2e="user-avatar"] img',
             'div[data-e2e="user-avatar"]',
-        ]:
+            'span[data-e2e="user-avatar"]',
+            '[class*="DivAvatar"] img',
+            '[class*="avatar"] img',
+            'img[class*="ImgAvatar"]',
+        ]
+
+        for sel in avatar_selectors:
             try:
                 el = driver.find_element(By.CSS_SELECTOR, sel)
                 if el.is_displayed():
@@ -504,8 +517,37 @@ def scrape_stories():
             except:
                 continue
 
+        # JS fallback — tìm bất kỳ avatar nào
+        if not avatar_clicked:
+            try:
+                avatar_clicked = driver.execute_script("""
+                    // Tìm avatar trong header/profile area
+                    let imgs = document.querySelectorAll('img');
+                    for (let img of imgs) {
+                        let src = img.src || '';
+                        let alt = (img.alt || '').toLowerCase();
+                        if ((src.includes('avatar') || src.includes('musically') || alt.includes('avatar'))
+                            && img.offsetWidth > 30 && img.offsetWidth < 200) {
+                            img.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                """)
+                if avatar_clicked:
+                    print("  ✅ Click avatar (JS fallback)")
+            except:
+                avatar_clicked = False
+
         if not avatar_clicked:
             print("  ❌ Không click được avatar!")
+            # Debug: lưu screenshot trên VPS
+            try:
+                debug_path = os.path.join(OUTPUT_DIR, "debug_avatar_fail.png")
+                driver.save_screenshot(debug_path)
+                print(f"  📸 Debug screenshot: {debug_path}")
+            except:
+                pass
             return []
 
         # Chờ story viewer
