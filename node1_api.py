@@ -27,15 +27,61 @@ TARGET_USER = "The_sunflower71"
 YTDLP_CMD = [sys.executable, "-m", "yt_dlp"]
 HOST = "0.0.0.0"
 PORT = 8888
+
+# ==== API KEY AUTH ====
+API_KEY_FILE = os.path.join(BASE_DIR, "data", "api_key.txt")
+# Domain được phép (CORS) — thêm domain frontend của bạn
+ALLOWED_ORIGINS = [
+    "https://khanhvy719.github.io",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5500",
+]
+
+def load_or_create_api_key():
+    """Tạo API key ngẫu nhiên nếu chưa có."""
+    os.makedirs(os.path.dirname(API_KEY_FILE), exist_ok=True)
+    if os.path.exists(API_KEY_FILE):
+        with open(API_KEY_FILE, "r") as f:
+            key = f.read().strip()
+            if key:
+                return key
+    import secrets
+    key = secrets.token_urlsafe(32)
+    with open(API_KEY_FILE, "w") as f:
+        f.write(key)
+    print(f"🔑 API Key mới được tạo: {key}")
+    print(f"   Lưu tại: {API_KEY_FILE}")
+    return key
+
+API_KEY = load_or_create_api_key()
 # ===========================================================
 
 app = Flask(__name__)
 
+@app.before_request
+def check_api_key():
+    """Middleware: Kiểm tra API key cho mọi request."""
+    # Bỏ qua OPTIONS (preflight CORS)
+    if request.method == "OPTIONS":
+        return
+
+    # Lấy key từ header hoặc query param
+    key = request.headers.get("X-API-Key") or request.args.get("key")
+
+    if key != API_KEY:
+        return jsonify({
+            "error": "Unauthorized",
+            "message": "API key không hợp lệ. Thêm header 'X-API-Key' hoặc param '?key=xxx'"
+        }), 403
+
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
+    origin = request.headers.get("Origin", "")
+    if origin in ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key"
     return response
 
 
