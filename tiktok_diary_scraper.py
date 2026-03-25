@@ -698,7 +698,7 @@ def cleanup_expired_audio(stories_data):
 
 
 STATUS_FILE = os.path.join(OUTPUT_DIR, "story_worker_status.json")
-SCRAPE_INTERVAL = 600  # 10 phút
+SCRAPE_INTERVAL = 60  # 1 phút
 
 
 def update_status(status, message="", next_run=None):
