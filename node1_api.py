@@ -33,6 +33,8 @@ API_KEY_FILE = os.path.join(BASE_DIR, "data", "api_key.txt")
 # Domain được phép (CORS) — thêm domain frontend của bạn
 ALLOWED_ORIGINS = [
     "https://khanhvy719.github.io",
+    "https://khanhwiee.site",
+    "https://khanh-vy-portfolio-production.up.railway.app",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5500",
