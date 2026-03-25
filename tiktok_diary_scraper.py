@@ -482,16 +482,50 @@ def scrape_stories():
     ensure_dirs()
 
     # ============================
-    # PHASE 1: Thu thập URLs
+    # PHASE 1: Thu thập URLs (retry)
     # ============================
-    print("🚀 Khởi động Chrome...")
-    driver, display = setup_chrome()
+    driver = None
+    display = None
     story_urls = []
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        print(f"\n🚀 Khởi động Chrome... (lần {attempt}/{max_retries})")
+        try:
+            # Cleanup Chrome cũ nếu retry
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+            if display:
+                try:
+                    display.stop()
+                except:
+                    pass
+
+            driver, display = setup_chrome()
+
+            print(f"\n📡 Mở profile @{TARGET_USER}...")
+            driver.get(TIKTOK_URL)
+            time.sleep(10)
+            break  # Thành công → thoát retry
+        except Exception as e:
+            print(f"  ❌ Chrome lỗi (lần {attempt}): {e}")
+            if attempt < max_retries:
+                # Kill zombie chrome
+                try:
+                    import subprocess as sp
+                    if platform.system() == "Linux":
+                        sp.run(["pkill", "-f", "chrome"], capture_output=True)
+                    time.sleep(5)
+                except:
+                    pass
+            else:
+                print("  ❌ Hết retry, bỏ qua cycle này")
+                return []
 
     try:
-        print(f"\n📡 Mở profile @{TARGET_USER}...")
-        driver.get(TIKTOK_URL)
-        time.sleep(10)  # Chờ lâu hơn trên VPS
 
         # Đóng popup / cookie consent / login modal
         popup_selectors = [
@@ -723,7 +757,7 @@ def cleanup_expired_files(stories_data):
 
 
 STATUS_FILE = os.path.join(OUTPUT_DIR, "story_worker_status.json")
-SCRAPE_INTERVAL = 60  # 1 phút
+SCRAPE_INTERVAL = 300  # 5 phút
 
 
 def update_status(status, message="", next_run=None):
