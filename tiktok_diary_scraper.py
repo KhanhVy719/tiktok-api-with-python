@@ -266,14 +266,40 @@ def collect_story_urls(driver):
             if story_type == "photo":
                 cdn = get_image_cdn_from_dom(driver)
                 music = get_music_from_dom(driver)
+                story_id = current_url.rstrip("/").split("/")[-1]
+
+                # Download ảnh ngay (CDN hết hạn nhanh!)
                 if cdn:
                     entry["image_cdn"] = cdn
+                    img_path = os.path.join(STORY_DIR, f"img_{story_id}.jpg")
+                    if os.path.exists(img_path) and os.path.getsize(img_path) > 1000:
+                        entry["image_file"] = img_path
+                        print(f"       🖼 Image đã có (skip)")
+                    else:
+                        try:
+                            resp = requests.get(
+                                cdn,
+                                headers={
+                                    "User-Agent": "Mozilla/5.0",
+                                    "Referer": "https://www.tiktok.com/",
+                                },
+                                timeout=30
+                            )
+                            if resp.status_code == 200 and len(resp.content) > 1000:
+                                with open(img_path, "wb") as f:
+                                    f.write(resp.content)
+                                entry["image_file"] = img_path
+                                print(f"       🖼 Image saved ({format_filesize(len(resp.content))})")
+                            else:
+                                print(f"       🖼 Image download failed ({resp.status_code})")
+                        except Exception as e:
+                            print(f"       🖼 Image error: {e}")
+
                 if music:
                     entry["music"] = music
                     # Download audio ngay (CDN hết hạn nhanh!)
                     audio_src = music.get("audio_src", "")
                     if audio_src and audio_src.startswith("http"):
-                        story_id = current_url.rstrip("/").split("/")[-1]
                         audio_path = os.path.join(STORY_DIR, f"audio_{story_id}.mp3")
                         # Skip nếu đã có file
                         if os.path.exists(audio_path) and os.path.getsize(audio_path) > 500:
@@ -663,38 +689,37 @@ def save_to_json(stories_data):
     print(f"\n💾 JSON: {filename}")
 
     # Dọn audio hết hạn
-    cleanup_expired_audio(stories_data)
+    cleanup_expired_files(stories_data)
 
     return filename
 
 
-def cleanup_expired_audio(stories_data):
-    """Xóa audio files của stories đã hết hạn (không còn trong viewer)."""
+def cleanup_expired_files(stories_data):
+    """Xóa audio + image files của stories đã hết hạn."""
     import glob as g
 
-    # Lấy danh sách story_id hiện tại
     current_ids = set(s.get("story_id", "") for s in stories_data)
 
-    # Quét tất cả audio files
-    audio_files = g.glob(os.path.join(STORY_DIR, "audio_*.mp3"))
     removed = 0
-    for f in audio_files:
-        # Tách story_id từ filename: audio_7620824822469250325.mp3
-        basename = os.path.basename(f)
-        file_id = basename.replace("audio_", "").replace(".mp3", "")
+    # Quét audio + image files
+    for pattern in ["audio_*.mp3", "img_*.jpg"]:
+        for f in g.glob(os.path.join(STORY_DIR, pattern)):
+            basename = os.path.basename(f)
+            # Tách story_id: audio_123.mp3 → 123, img_123.jpg → 123
+            file_id = basename.split("_", 1)[1].rsplit(".", 1)[0]
 
-        if file_id not in current_ids:
-            try:
-                os.remove(f)
-                removed += 1
-                print(f"  🗑️ Xóa audio hết hạn: {basename}")
-            except:
-                pass
+            if file_id not in current_ids:
+                try:
+                    os.remove(f)
+                    removed += 1
+                    print(f"  🗑️ Xóa hết hạn: {basename}")
+                except:
+                    pass
 
     if removed:
-        print(f"  🧹 Đã xóa {removed} audio files hết hạn")
+        print(f"  🧹 Đã xóa {removed} files hết hạn")
     else:
-        print(f"  ✅ Không có audio hết hạn")
+        print(f"  ✅ Không có files hết hạn")
 
 
 STATUS_FILE = os.path.join(OUTPUT_DIR, "story_worker_status.json")

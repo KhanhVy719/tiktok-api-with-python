@@ -1071,10 +1071,23 @@ def cdn_proxy_request(url, content_type_default="application/octet-stream"):
 
 @app.route("/story/image")
 def story_image():
-    """Proxy image CDN URL với cookies."""
+    """Serve ảnh story. Local file trước, CDN proxy fallback."""
     url = request.args.get("url", "")
     if not url or not url.startswith("http"):
         return jsonify({"error": "Missing url param"}), 400
+
+    # Thử tìm file local từ story_id trong JSON cache
+    for pattern_name in glob.glob(os.path.join(STORY_DATA_DIR, "tiktok_diary_*.json")):
+        with open(pattern_name, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for s in data.get("stories", []):
+            if s.get("cdn_url", "") == url or s.get("image_cdn", "") == url:
+                sid = s.get("story_id", "")
+                img_path = os.path.join(STORY_DATA_DIR, "stories", f"img_{sid}.jpg")
+                if os.path.exists(img_path):
+                    return send_file(img_path, mimetype="image/jpeg")
+
+    # Fallback: CDN proxy với cookies
     return cdn_proxy_request(url, "image/jpeg")
 
 
