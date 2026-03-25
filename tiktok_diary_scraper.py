@@ -63,13 +63,18 @@ def setup_chrome():
 
     is_linux = platform.system() == "Linux"
     display = None
+    use_headless = False
+
     if is_linux:
+        # Thử Xvfb trước (tốt hơn headless cho DOM)
         try:
             from pyvirtualdisplay import Display
             display = Display(visible=False, size=(1280, 720))
             display.start()
-        except:
-            pass
+            print("  ✅ Xvfb virtual display started")
+        except Exception as e:
+            print(f"  ⚠️ Xvfb không có, dùng headless mode: {e}")
+            use_headless = True
 
     options = uc.ChromeOptions()
     options.add_argument("--window-size=1280,900")
@@ -78,7 +83,19 @@ def setup_chrome():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--lang=vi-VN")
 
-    driver = uc.Chrome(options=options, headless=False)
+    if is_linux:
+        options.add_argument("--disable-setuid-sandbox")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--remote-debugging-port=0")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-infobars")
+        # Tăng shared memory
+        options.add_argument("--shm-size=2g")
+
+    if use_headless:
+        options.add_argument("--headless=new")
+
+    driver = uc.Chrome(options=options, headless=use_headless)
     return driver, display
 
 
